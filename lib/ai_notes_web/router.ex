@@ -24,6 +24,8 @@ defmodule AiNotesWeb.Router do
 
     live "/notes/:id", NoteLive.Show, :show
     live "/notes/:id/show/edit", NoteLive.Show, :edit
+    get "/notes/:id/pdf", PdfController, :note_pdf
+
   end
 
   # Other scopes may use custom stacks.

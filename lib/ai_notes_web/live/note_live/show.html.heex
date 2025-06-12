@@ -12,6 +12,10 @@
   <:item title="Title">{@note.title}</:item>
   <:item title="Content">{@note.content}</:item>
 </.list>
+<br>
+<.link href={~p"/notes/#{@note.id}/pdf"} class="btn btn-primary" download>
+  Download as PDF
+</.link>
 
 <.back navigate={~p"/notes"}>Back to notes</.back>
 

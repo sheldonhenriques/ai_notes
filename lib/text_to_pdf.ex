@@ -1,7 +1,7 @@
 defmodule TextToPdf do
   @moduledoc """
-  A text-to-PDF generator for Elixir with support for text formatting.
-  Supports multi-line, multi-page PDFs with bold, italic, bold+italic, and underline.
+  A text-to-PDF generator for Elixir with proper Unicode and emoji support.
+  Uses Identity-H encoding instead of WinAnsiEncoding for Unicode characters.
   """
 
   @page_width 595
@@ -17,14 +17,16 @@ defmodule TextToPdf do
   @chars_per_line div(@max_line_width, @avg_char_width |> round)
   @lines_per_page div(@start_y - @bottom_margin, @line_height)
 
-  # Font definitions for different styles
+  # Font definitions - using TrueType fonts for Unicode support
   @fonts %{
-    regular: %{name: "F1", base: "Helvetica"},
-    bold: %{name: "F2", base: "Helvetica-Bold"},
-    italic: %{name: "F3", base: "Helvetica-Oblique"},
-    bold_italic: %{name: "F4", base: "Helvetica-BoldOblique"}
+    regular: %{name: "F1", base: "Helvetica", encoding: "WinAnsiEncoding"},
+    bold: %{name: "F2", base: "Helvetica-Bold", encoding: "WinAnsiEncoding"},
+    italic: %{name: "F3", base: "Helvetica-Oblique", encoding: "WinAnsiEncoding"},
+    bold_italic: %{name: "F4", base: "Helvetica-BoldOblique", encoding: "WinAnsiEncoding"},
+    unicode: %{name: "F5", base: "Arial-Unicode-MS", encoding: "Identity-H"}
   }
 
+  # Regular fonts with WinAnsiEncoding (for basic Latin text)
   @font_regular """
   2 0 obj
   << /Type /Font
@@ -69,10 +71,69 @@ defmodule TextToPdf do
   endobj
   """
 
+  # Unicode font with Identity-H encoding for emojis and special characters
+  @font_unicode """
+  8 0 obj
+  << /Type /Font
+     /Subtype /Type0
+     /Name /F5
+     /BaseFont /Arial-Unicode-MS
+     /Encoding /Identity-H
+     /DescendantFonts [9 0 R]
+     /ToUnicode 11 0 R
+  >>
+  endobj
+
+  9 0 obj
+  << /Type /Font
+     /Subtype /CIDFontType2
+     /BaseFont /Arial-Unicode-MS
+     /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >>
+     /FontDescriptor 10 0 R
+     /DW 1000
+  >>
+  endobj
+
+  10 0 obj
+  << /Type /FontDescriptor
+     /FontName /Arial-Unicode-MS
+     /Flags 32
+     /FontBBox [-1011 -329 2260 1078]
+     /ItalicAngle 0
+     /Ascent 1069
+     /Descent -271
+     /CapHeight 1069
+     /StemV 0
+  >>
+  endobj
+
+  11 0 obj
+  << /Length 368 >>
+  stream
+  /CIDInit /ProcSet findresource begin
+  12 dict begin
+  begincmap
+  /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> def
+  /CMapName /Adobe-Identity-UCS def
+  /CMapType 2 def
+  1 begincodespacerange
+  <0000> <FFFF>
+  endcodespacerange
+  1 beginbfrange
+  <0000> <FFFF> <0000>
+  endbfrange
+  endcmap
+  CMapName currentdict /CMap defineresource pop
+  end
+  end
+  endstream
+  endobj
+  """
+
   def generate_pdf(text, filename \\ "output.pdf") do
     File.mkdir_p!(Path.dirname(filename))
 
-    # Parse text with formatting markup
+    # Parse text with formatting markup and detect Unicode characters
     parsed_lines = parse_formatted_text(text)
 
     # Process lines with word wrapping while preserving formatting
@@ -86,7 +147,7 @@ defmodule TextToPdf do
       |> Enum.with_index()
       |> Enum.map(fn {page_lines, page_index} ->
         content_stream = generate_page_content(page_lines)
-        id = 10 + page_index
+        id = 15 + page_index
 
         content_obj = %{
           id: id,
@@ -104,12 +165,12 @@ defmodule TextToPdf do
       end)
       |> Enum.unzip()
 
-    # Generate page objects referencing the content stream
+    # Generate page objects with all font references
     {page_objs, page_ids} =
       content_ids
       |> Enum.with_index()
       |> Enum.map(fn {content_id, page_index} ->
-        page_id = 20 + page_index
+        page_id = 25 + page_index
 
         page_obj = %{
           id: page_id,
@@ -119,7 +180,7 @@ defmodule TextToPdf do
              /Parent 4 0 R
              /MediaBox [0 0 #{@page_width} #{@page_height}]
              /Contents #{content_id} 0 R
-             /Resources << /Font << /F1 2 0 R /F2 3 0 R /F3 6 0 R /F4 7 0 R >> >>
+             /Resources << /Font << /F1 2 0 R /F2 3 0 R /F3 6 0 R /F4 7 0 R /F5 8 0 R >> >>
           >>
           endobj
           """
@@ -131,7 +192,7 @@ defmodule TextToPdf do
 
     # Static PDF catalog and page tree
     catalog_objs = [
-      %{id: 1, content: "1 0 obj\n<< >>\nendobj\n"}, # Placeholder object
+      %{id: 1, content: "1 0 obj\n<< >>\nendobj\n"},
       %{id: 2, content: @font_regular},
       %{id: 3, content: @font_bold},
       %{id: 4, content: """
@@ -150,7 +211,8 @@ defmodule TextToPdf do
       endobj
       """},
       %{id: 6, content: @font_italic},
-      %{id: 7, content: @font_bold_italic}
+      %{id: 7, content: @font_bold_italic},
+      %{id: 8, content: @font_unicode}
     ]
 
     all_objs = catalog_objs ++ content_objs ++ page_objs
@@ -177,7 +239,7 @@ defmodule TextToPdf do
     {:ok, pdf}
   end
 
-  # Parse text with markdown-style formatting
+  # Enhanced text parsing that detects Unicode characters
   defp parse_formatted_text(text) do
     text
     |> String.split("\n")
@@ -190,14 +252,44 @@ defmodule TextToPdf do
     indent = count_leading_spaces(line)
     trimmed_line = String.trim_leading(line)
 
-    segments = parse_segments(trimmed_line)
+    segments = parse_segments_with_unicode(trimmed_line)
 
     %{segments: segments, indent: indent}
   end
 
+  # Parse segments and detect Unicode characters
+  defp parse_segments_with_unicode(text) do
+    # First split by Unicode characters (including emojis)
+    parts = split_by_unicode(text)
+
+    Enum.flat_map(parts, fn part ->
+      if contains_unicode?(part) do
+        [%{text: part, style: :unicode, underline: false}]
+      else
+        parse_segments(part)
+      end
+    end)
+  end
+
+  # Split text into ASCII and Unicode parts
+  defp split_by_unicode(text) do
+    # Regex to match Unicode characters outside basic ASCII range
+    unicode_regex = ~r/[\x{80}-\x{10FFFF}]+/u
+
+    Regex.split(unicode_regex, text, include_captures: true, trim: true)
+    |> Enum.filter(&(&1 != ""))
+  end
+
+  # Check if text contains Unicode characters
+  defp contains_unicode?(text) do
+    # Check for characters outside basic ASCII range (0-127)
+    text
+    |> String.to_charlist()
+    |> Enum.any?(&(&1 > 127))
+  end
+
   # Parse segments with formatting markup
   defp parse_segments(text) do
-    # Match patterns: <u>text</u>, <b>text</b>, <i>text</i>, ***text***, **text**, *text*, __text__, _text_
     regex = ~r/(<u>.*?<\/u>|<b>.*?<\/b>|<i>.*?<\/i>|\*\*\*.*?\*\*\*|\*\*.*?\*\*|\*.*?\*|__.*?__|_.*?_|[^*_<]+)/
 
     Regex.scan(regex, text, capture: :all_but_first)
@@ -237,15 +329,13 @@ defmodule TextToPdf do
     end
   end
 
+  # Rest of the functions remain similar...
   defp wrap_formatted_line(%{segments: segments, indent: indent}) do
-    # For now, treat each formatted line as a single unit
-    # More sophisticated wrapping would need to handle segments separately
     combined_text = Enum.map_join(segments, "", & &1.text)
 
     if estimate_width(combined_text) <= @max_line_width do
       [%{segments: segments, indent: indent}]
     else
-      # Simple fallback: split into words and wrap
       words = String.split(combined_text)
       wrapped_lines = do_wrap_words(words, [], "", [])
 
@@ -309,20 +399,35 @@ defmodule TextToPdf do
     content
   end
 
-  # Fixed function: Use absolute positioning (Tm) instead of relative positioning (Td)
+  # Enhanced segment content generation with proper Unicode handling
   defp generate_segment_content(%{text: text, style: style} = segment, x_pos, y_pos) do
-    font_name = @fonts[style].name
-    escaped_text = escape_text(text)
+    font_name = case style do
+      :unicode -> @fonts[:unicode].name
+      _ -> @fonts[style].name
+    end
 
-    # Use Tm (text matrix) for absolute positioning instead of Td (relative positioning)
-    basic_content = "BT /#{font_name} 12 Tf 1 0 0 1 #{x_pos} #{y_pos} Tm (#{escaped_text}) Tj ET"
+    # Handle Unicode text differently
+    escaped_text = if style == :unicode do
+      # For Unicode font, convert to hex representation
+      text
+      |> String.to_charlist()
+      |> Enum.map(&Integer.to_string(&1, 16))
+      |> Enum.map(&String.pad_leading(&1, 4, "0"))
+      |> Enum.join("")
+      |> then(&("<" <> &1 <> ">"))
+    else
+      # For regular fonts, use standard escaping
+      escape_text(text)
+      |> then(&("(" <> &1 <> ")"))
+    end
+
+    basic_content = "BT /#{font_name} 12 Tf 1 0 0 1 #{x_pos} #{y_pos} Tm #{escaped_text} Tj ET"
 
     underline = Map.get(segment, :underline, false)
 
     if underline and text != "" do
       text_width = estimate_width(text)
       underline_y = y_pos - 2
-      # Set line width and draw underline
       underline_content = "q\n1 w\n#{x_pos} #{underline_y} m\n#{x_pos + text_width} #{underline_y} l\nS\nQ"
       basic_content <> "\n" <> underline_content
     else
@@ -339,17 +444,12 @@ defmodule TextToPdf do
   end
 
   defp build_objects(objects) do
-    # Start with offset for PDF header
     initial_offset = byte_size("%PDF-1.4\n")
 
     {body, xrefs, _final_offset} =
       Enum.reduce(objects, {"", [], initial_offset}, fn obj, {body_acc, xref_acc, current_offset} ->
         content = obj.content
-
-        # Add xref entry for this object
         xref_entry = String.pad_leading("#{current_offset}", 10, "0") <> " 00000 n \n"
-
-        # Update accumulator
         new_body = body_acc <> content
         new_xrefs = xref_acc ++ [xref_entry]
         new_offset = current_offset + byte_size(content)

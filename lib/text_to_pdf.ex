@@ -31,11 +31,11 @@ defmodule TextToPdf do
     File.mkdir_p!(Path.dirname(filename))
 
     # Process text: split into lines and handle word wrapping
+    # Don't reject empty lines - they represent intentional blank lines
     lines =
       text
       |> String.split("\n")
       |> Enum.flat_map(&wrap_line/1)
-      |> Enum.reject(&(&1 == ""))
 
     pages = Enum.chunk_every(lines, @lines_per_page)
 
@@ -133,6 +133,8 @@ defmodule TextToPdf do
     File.write!(filename, pdf)
     {:ok, filename}
   end
+
+  defp wrap_line(""), do: [""]  # Preserve empty lines as blank lines
 
   defp wrap_line(line) do
     if String.length(line) <= @chars_per_line do

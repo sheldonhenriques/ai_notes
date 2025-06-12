@@ -13,7 +13,8 @@ defmodule TextToPdf do
   @bottom_margin 50
   @top_margin 50
   @max_line_width @page_width - @left_margin - @right_margin
-  @chars_per_line 80  # Approximate for 12pt Helvetica
+  @avg_char_width 5.5  # Better fit than 6 for Helvetica 12pt
+  @chars_per_line div(@max_line_width, @avg_char_width |> round)
   @lines_per_page div(@start_y - @bottom_margin, @line_height)
 
   @font_object """
@@ -133,33 +134,32 @@ defmodule TextToPdf do
     {:ok, pdf}
   end
 
-  defp wrap_line(""), do: [""]  # Preserve empty lines as blank lines
+  defp wrap_line(""), do: [""]
 
   defp wrap_line(line) do
-    if String.length(line) <= @chars_per_line do
-      [line]
-    else
-      line
-      |> String.split(" ")
-      |> Enum.reduce({[], ""}, fn word, {acc_lines, current_line} ->
-        test_line = if current_line == "", do: word, else: current_line <> " " <> word
+    words = String.split(line, " ")
+    do_wrap(words, [], "", [])
+  end
 
-        if String.length(test_line) <= @chars_per_line do
-          {acc_lines, test_line}
-        else
-          if current_line == "" do
-            # Word is longer than line width, break it
-            {acc_lines ++ [word], ""}
-          else
-            {acc_lines ++ [current_line], word}
-          end
-        end
-      end)
-      |> then(fn {lines, last_line} ->
-        if last_line == "", do: lines, else: lines ++ [last_line]
-      end)
+  defp do_wrap([], acc, curr_line, result) do
+    Enum.reverse([curr_line | result])
+  end
+
+  defp do_wrap([word | rest], acc, curr_line, result) do
+    new_line = if curr_line == "", do: word, else: curr_line <> " " <> word
+    est_width = estimate_width(new_line)
+
+    if est_width > @max_line_width do
+      do_wrap([word | rest], acc, "", [curr_line | result])
+    else
+      do_wrap(rest, acc, new_line, result)
     end
   end
+
+  defp estimate_width(line) do
+    String.length(line) * @avg_char_width  # e.g. 6 or 5.5
+  end
+
 
   defp generate_page_content(lines) do
     lines

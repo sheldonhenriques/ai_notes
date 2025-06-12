@@ -1,24 +1,44 @@
-<.header>
-  Note {@note.id}
-  <:subtitle>This is a note record from your database.</:subtitle>
-  <:actions>
+<div class="max-w-3xl mx-auto mt-10 p-6 bg-white rounded-2xl shadow-xl">
+
+  <!-- Top Header -->
+  <div class="flex justify-between items-start mb-6">
+    <div>
+      <h1 class="text-3xl font-bold text-gray-800">Note <%= @note.id %></h1>
+      <p class="text-sm text-gray-500">This is a note record from your database.</p>
+      <.back navigate={~p"/notes"} class="mt-2 inline-block text-sm text-blue-600 hover:underline">
+        Back to notes
+      </.back>
+    </div>
+
     <.link patch={~p"/notes/#{@note}/show/edit"} phx-click={JS.push_focus()}>
-      <.button>Edit note</.button>
+      <.button class="bg-black text-white px-4 py-2 rounded hover:bg-gray-800">Edit note</.button>
     </.link>
-  </:actions>
-</.header>
+  </div>
 
-<.list>
-  <:item title="Title">{@note.title}</:item>
-  <:item title="Content">{@note.content}</:item>
-</.list>
-<br>
-<.link href={~p"/notes/#{@note.id}/pdf"} class="btn btn-primary" download>
-  Download as PDF
-</.link>
+  <!-- Note Content -->
+  <div class="space-y-6">
+    <div>
+      <h2 class="text-lg font-semibold text-gray-700">Title</h2>
+      <p class="text-gray-900 mt-1"><%= @note.title %></p>
+    </div>
 
-<.back navigate={~p"/notes"}>Back to notes</.back>
+    <div>
+      <h2 class="text-lg font-semibold text-gray-700">Content</h2>
+      <pre class="whitespace-pre-wrap text-gray-800 bg-gray-50 p-4 rounded border border-gray-200">
+<%= @note.content %>
+      </pre>
+    </div>
+  </div>
 
+  <!-- Actions -->
+  <div class="mt-8 flex justify-end">
+    <.link href={~p"/notes/#{@note.id}/pdf"} class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition" download>
+      Download as PDF
+    </.link>
+  </div>
+</div>
+
+<!-- Modal for editing -->
 <.modal :if={@live_action == :edit} id="note-modal" show on_cancel={JS.patch(~p"/notes/#{@note}")}>
   <.live_component
     module={AiNotesWeb.NoteLive.FormComponent}

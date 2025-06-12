@@ -20,12 +20,12 @@ defmodule AiNotesWeb.PdfController do
     full_text = "#{note.title}\n\n#{processed_content}"
 
     filename = "note_#{id}.pdf"
-    {:ok, pdf_path} = TextToPdf.generate_pdf(full_text, "priv/static/tmp/#{filename}")
+    {:ok, pdf_binary} = TextToPdf.generate_pdf(full_text)
 
     conn
     |> put_resp_content_type("application/pdf")
-    |> put_resp_header("content-disposition", "attachment; filename=\"#{filename}\"")
-    |> send_file(200, pdf_path)
+    |> put_resp_header("content-disposition", ~s[inline; filename=\"#{filename}\"])
+    |> send_resp(200, pdf_binary)
   end
 
   # Helper function to process content and handle different newline formats

@@ -130,8 +130,7 @@ defmodule TextToPdf do
     """
 
     pdf = "%PDF-1.4\n" <> body <> trailer
-    File.write!(filename, pdf)
-    {:ok, filename}
+    {:ok, pdf}
   end
 
   defp wrap_line(""), do: [""]  # Preserve empty lines as blank lines

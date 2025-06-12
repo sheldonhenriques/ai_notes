@@ -134,25 +134,28 @@ defmodule TextToPdf do
     {:ok, pdf}
   end
 
-  defp wrap_line(""), do: [""]
+  defp wrap_line(""), do: [%{text: "", indent: 0}]
 
   defp wrap_line(line) do
-    words = String.split(line, " ")
-    do_wrap(words, [], "", [])
+    indent = count_leading_spaces(line)
+    words = String.trim_leading(line) |> String.split(" ")
+    wrapped_lines = do_wrap(words, [], "", [])
+
+    Enum.map(wrapped_lines, fn l -> %{text: l, indent: indent} end)
   end
 
-  defp do_wrap([], acc, curr_line, result) do
+  defp do_wrap([], _acc, curr_line, result) do
     Enum.reverse([curr_line | result])
   end
 
-  defp do_wrap([word | rest], acc, curr_line, result) do
+  defp do_wrap([word | rest], _acc, curr_line, result) do
     new_line = if curr_line == "", do: word, else: curr_line <> " " <> word
     est_width = estimate_width(new_line)
 
     if est_width > @max_line_width do
-      do_wrap([word | rest], acc, "", [curr_line | result])
+      do_wrap([word | rest], [], "", [curr_line | result])
     else
-      do_wrap(rest, acc, new_line, result)
+      do_wrap(rest, [], new_line, result)
     end
   end
 
@@ -160,14 +163,21 @@ defmodule TextToPdf do
     String.length(line) * @avg_char_width  # e.g. 6 or 5.5
   end
 
+  defp count_leading_spaces(line) do
+    line
+    |> String.graphemes()
+    |> Enum.take_while(&(&1 == " "))
+    |> length()
+  end
+
 
   defp generate_page_content(lines) do
     lines
     |> Enum.with_index()
-    |> Enum.map(fn {line, index} ->
+    |> Enum.map(fn {%{text: line, indent: indent}, index} ->
       y_pos = @start_y - (index * @line_height)
-      # Use absolute positioning instead of relative Td
-      "BT /F1 12 Tf 1 0 0 1 #{@left_margin} #{y_pos} Tm (#{escape_text(line)}) Tj ET"
+      x_offset = @left_margin + indent * 4  # 4pt per space (adjust as needed)
+      "BT /F1 12 Tf 1 0 0 1 #{x_offset} #{y_pos} Tm (#{escape_text(line)}) Tj ET"
     end)
     |> Enum.join("\n")
   end

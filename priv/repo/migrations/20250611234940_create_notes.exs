@@ -10,3 +10,13 @@ defmodule AiNotes.Repo.Migrations.CreateNotes do
     end
   end
 end
+
+defmodule AiNotes.Repo.Migrations.ChangeNotesContentToText do
+  use Ecto.Migration
+
+  def change do
+    alter table(:notes) do
+      modify :content, :text
+    end
+  end
+end

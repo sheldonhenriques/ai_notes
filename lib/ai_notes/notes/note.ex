@@ -14,5 +14,7 @@ defmodule AiNotes.Notes.Note do
     note
     |> cast(attrs, [:title, :content])
     |> validate_required([:title, :content])
+    |> validate_length(:title, max: 255)
+    |> validate_length(:content, max: 10_000)
   end
 end

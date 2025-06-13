@@ -16,6 +16,13 @@ defmodule TextToPdf do
   @avg_char_width 5.5
   @chars_per_line div(@max_line_width, @avg_char_width |> round)
   @lines_per_page div(@start_y - @bottom_margin, @line_height)
+  @table_cell_padding 8
+  @table_row_height 24
+  @header_row_height 28
+  @line_width 0.5
+  @header_bg_gray 0.95
+  @alt_row_bg_gray 0.98
+  @border_gray 0.8
 
   # Font definitions - using TrueType fonts for Unicode support
   @fonts %{
@@ -134,19 +141,19 @@ defmodule TextToPdf do
     File.mkdir_p!(Path.dirname(filename))
 
     # Parse text with formatting markup and detect Unicode characters
-    parsed_lines = parse_formatted_text(text)
+    parsed_content = parse_formatted_text(text)
 
-    # Process lines with word wrapping while preserving formatting
-    lines = Enum.flat_map(parsed_lines, &wrap_formatted_line/1)
+    # Process content blocks (text and tables)
+    processed_content = Enum.flat_map(parsed_content, &process_content_block/1)
 
-    pages = Enum.chunk_every(lines, @lines_per_page)
+    pages = chunk_content_into_pages(processed_content)
 
-    # Generate PDF stream objects for each page's text
+    # Generate PDF stream objects for each page's content
     {content_objs, content_ids} =
       pages
       |> Enum.with_index()
-      |> Enum.map(fn {page_lines, page_index} ->
-        content_stream = generate_page_content(page_lines)
+      |> Enum.map(fn {page_content, page_index} ->
+        content_stream = generate_page_content(page_content)
         id = 15 + page_index
 
         content_obj = %{
@@ -243,10 +250,10 @@ defmodule TextToPdf do
   defp parse_formatted_text(text) do
     text
     |> String.split("\n")
-    |> Enum.map(&parse_line_formatting/1)
+    |> group_table_blocks()
   end
 
-  defp parse_line_formatting(""), do: %{segments: [%{text: "", style: :regular, underline: false}], indent: 0}
+  defp parse_line_formatting(""), do: %{type: :text, segments: [%{text: "", style: :regular, underline: false}], indent: 0}
 
   defp parse_line_formatting(line) do
     indent = count_leading_spaces(line)
@@ -254,7 +261,7 @@ defmodule TextToPdf do
 
     segments = parse_segments_with_unicode(trimmed_line)
 
-    %{segments: segments, indent: indent}
+    %{type: :text, segments: segments, indent: indent}
   end
 
   # Parse segments and detect Unicode characters
@@ -329,19 +336,38 @@ defmodule TextToPdf do
     end
   end
 
+  # Process content blocks (text lines or tables)
+  defp process_content_block({:text, line}) do
+    formatted_line = parse_line_formatting(line)
+    # Apply word wrapping to text lines
+    wrap_formatted_line(formatted_line)
+  end
+
+  defp process_content_block({:table, table_data}) do
+    [%{type: :table, data: table_data}]
+  end
+
   # Rest of the functions remain similar...
-  defp wrap_formatted_line(%{segments: segments, indent: indent}) do
+  defp wrap_formatted_line(%{type: :text, segments: segments, indent: indent} = line) do
+    # Check if this is a table line (contains table border characters)
     combined_text = Enum.map_join(segments, "", & &1.text)
 
-    if estimate_width(combined_text) <= @max_line_width do
-      [%{segments: segments, indent: indent}]
+    if String.contains?(combined_text, ["+", "|"]) and
+      (String.contains?(combined_text, "-") or String.length(combined_text) > @chars_per_line * 0.8) do
+      # This is likely a table line, don't wrap it
+      [line]
     else
-      words = String.split(combined_text)
-      wrapped_lines = do_wrap_words(words, [], "", [])
+      # Regular text wrapping logic
+      if estimate_width(combined_text) <= @max_line_width do
+        [line]
+      else
+        words = String.split(combined_text)
+        wrapped_lines = do_wrap_words(words, [], "", [])
 
-      Enum.map(wrapped_lines, fn line_text ->
-        %{segments: [%{text: line_text, style: :regular, underline: false}], indent: indent}
-      end)
+        Enum.map(wrapped_lines, fn line_text ->
+          %{type: :text, segments: [%{text: line_text, style: :regular, underline: false}], indent: indent}
+        end)
+      end
     end
   end
 
@@ -375,17 +401,47 @@ defmodule TextToPdf do
     |> length()
   end
 
-  defp generate_page_content(lines) do
-    lines
-    |> Enum.with_index()
-    |> Enum.map(fn {line_data, index} ->
-      generate_line_content(line_data, index)
+  # Improved content chunking that handles tables properly
+  defp chunk_content_into_pages(content) do
+    content
+    |> Enum.reduce({[], [], 0}, fn item, {pages, current_page, current_lines} ->
+      lines_needed = case item.type do
+        :text -> 1
+        :table -> length(item.data.rows) + 2  # Add space for table borders
+      end
+
+      if current_lines + lines_needed > @lines_per_page and current_page != [] do
+        # Start new page
+        {pages ++ [current_page], [item], lines_needed}
+      else
+        # Add to current page
+        {pages, current_page ++ [item], current_lines + lines_needed}
+      end
     end)
-    |> Enum.join("\n")
+    |> then(fn {pages, current_page, _} ->
+      if current_page != [], do: pages ++ [current_page], else: pages
+    end)
   end
 
-  defp generate_line_content(%{segments: segments, indent: indent}, line_index) do
-    y_pos = @start_y - (line_index * @line_height)
+  defp generate_page_content(content_items) do
+    {_final_content, _final_y} =
+      Enum.reduce(content_items, {"", @start_y}, fn item, {acc_content, current_y} ->
+        case item.type do
+          :text ->
+            line_content = generate_text_line_content(item, current_y)
+            {acc_content <> line_content <> "\n", current_y - @line_height}
+
+          :table ->
+            table_content = generate_table_content_pdf(item.data, current_y)
+            table_height = (length(item.data.rows) * @table_row_height) + @header_row_height
+            {acc_content <> table_content <> "\n", current_y - table_height - 10}
+        end
+      end)
+
+    _final_content
+  end
+
+  defp generate_text_line_content(%{segments: segments, indent: indent}, y_pos) do
     base_x = @left_margin + indent * 4
 
     {content, _final_x} =
@@ -440,7 +496,6 @@ defmodule TextToPdf do
     |> String.replace("\\", "\\\\")
     |> String.replace("(", "\\(")
     |> String.replace(")", "\\)")
-    |> String.replace("\r", "")
   end
 
   defp build_objects(objects) do
@@ -458,5 +513,277 @@ defmodule TextToPdf do
       end)
 
     {body, xrefs}
+  end
+
+  # Improved table content generation for PDF graphics
+  defp generate_table_content_pdf(table_data, start_y) do
+    rows = table_data.rows
+    col_widths = table_data.col_widths
+
+    # Center the table horizontally
+    total_table_width = Enum.sum(col_widths)
+    start_x = @left_margin + (@max_line_width - total_table_width) / 2
+
+    # Generate table structure (borders and backgrounds)
+    table_structure = draw_table_structure(rows, col_widths, start_x, start_y)
+
+    # Generate table text content
+    table_text = draw_table_text(rows, col_widths, start_x, start_y)
+
+    table_structure <> "\n" <> table_text
+  end
+
+  defp draw_table_structure(rows, col_widths, start_x, start_y) do
+    num_rows = length(rows)
+    total_width = Enum.sum(col_widths)
+    total_height = @header_row_height + (num_rows - 1) * @table_row_height
+
+    structure = []
+
+    # Header background
+    structure = structure ++ [
+      "q",  # Save graphics state
+      "#{@header_bg_gray} g",  # Set fill color (light gray)
+      "#{start_x} #{start_y - @header_row_height} #{total_width} #{@header_row_height} re",  # Rectangle
+      "f",  # Fill
+      "Q"   # Restore graphics state
+    ]
+
+    # Alternating row backgrounds
+    structure = structure ++ draw_alternating_backgrounds(rows, col_widths, start_x, start_y)
+
+    # Horizontal lines
+    structure = structure ++ draw_horizontal_lines(num_rows, total_width, start_x, start_y)
+
+    # Vertical lines
+    structure = structure ++ draw_vertical_lines(col_widths, total_height, start_x, start_y)
+
+    Enum.join(structure, "\n")
+  end
+
+  defp draw_alternating_backgrounds(rows, col_widths, start_x, start_y) do
+    total_width = Enum.sum(col_widths)
+
+    rows
+    |> Enum.drop(1)  # Skip header row
+    |> Enum.with_index(1)
+    |> Enum.filter(fn {_row, index} -> rem(index, 2) == 0 end)  # Even rows only
+    |> Enum.flat_map(fn {_row, index} ->
+      y_pos = start_y - @header_row_height - (index * @table_row_height)
+      [
+        "q",
+        "#{@alt_row_bg_gray} g",
+        "#{start_x} #{y_pos} #{total_width} #{@table_row_height} re",
+        "f",
+        "Q"
+      ]
+    end)
+  end
+
+  defp draw_horizontal_lines(num_rows, total_width, start_x, start_y) do
+    # Top border
+    lines = [
+      "q",
+      "#{@line_width} w",
+      "#{@border_gray} G",
+      "#{start_x} #{start_y} m",
+      "#{start_x + total_width} #{start_y} l",
+      "S"
+    ]
+
+    # Header separator (thicker line)
+    lines = lines ++ [
+      "1 w",  # Thicker line for header
+      "0.6 G",  # Darker gray
+      "#{start_x} #{start_y - @header_row_height} m",
+      "#{start_x + total_width} #{start_y - @header_row_height} l",
+      "S"
+    ]
+
+    # Row separators (thin lines)
+    lines = lines ++
+      Enum.flat_map(1..(num_rows-1), fn row_index ->
+        y_pos = start_y - @header_row_height - (row_index * @table_row_height)
+        [
+          "#{@line_width} w",
+          "#{@border_gray} G",
+          "#{start_x} #{y_pos} m",
+          "#{start_x + total_width} #{y_pos} l",
+          "S"
+        ]
+      end)
+
+    # Bottom border
+    bottom_y = start_y - @header_row_height - ((num_rows - 1) * @table_row_height)
+    lines = lines ++ [
+      "#{@line_width} w",
+      "#{@border_gray} G",
+      "#{start_x} #{bottom_y} m",
+      "#{start_x + total_width} #{bottom_y} l",
+      "S",
+      "Q"
+    ]
+
+    lines
+  end
+
+  defp draw_vertical_lines(col_widths, total_height, start_x, start_y) do
+    lines = [
+      "q",
+      "#{@line_width} w",
+      "#{@border_gray} G"
+    ]
+
+    # Left border
+    lines = lines ++ [
+      "#{start_x} #{start_y} m",
+      "#{start_x} #{start_y - total_height} l",
+      "S"
+    ]
+
+    # Column separators and right border
+    {lines, _final_x} =
+      Enum.reduce(col_widths, {lines, start_x}, fn width, {acc_lines, current_x} ->
+        new_x = current_x + width
+        new_lines = acc_lines ++ [
+          "#{new_x} #{start_y} m",
+          "#{new_x} #{start_y - total_height} l",
+          "S"
+        ]
+        {new_lines, new_x}
+      end)
+
+    lines ++ ["Q"]
+  end
+
+
+  defp draw_table_text(rows, col_widths, start_x, start_y) do
+    rows
+    |> Enum.with_index()
+    |> Enum.map(fn {row, row_index} ->
+      draw_row_text_centered(row, col_widths, start_x, start_y, row_index)
+    end)
+    |> Enum.join("\n")
+  end
+
+  defp draw_row_text_centered(row, col_widths, start_x, start_y, row_index) do
+    row_height = if row_index == 0, do: @header_row_height, else: @table_row_height
+     y_pos = start_y - (row_height * 0.3) - (row_index * @table_row_height) -
+          (if row_index > 0, do: @header_row_height - @table_row_height, else: 0)
+
+    font = if row_index == 0, do: "F2", else: "F1"  # Bold for headers
+    font_size = 10
+
+    row
+    |> Enum.with_index()
+    |> Enum.map(fn {cell, col_index} ->
+      col_widths_before = Enum.take(col_widths, col_index) |> Enum.sum()
+      col_width = Enum.at(col_widths, col_index)
+
+      # More accurate text width calculation for centering
+      # Estimate character width based on font size (average for Helvetica)
+      char_width = font_size * 0.55  # More accurate character width
+      text_width = String.length(cell) * char_width
+
+      # Calculate cell boundaries
+      cell_left = start_x + col_widths_before
+      cell_right = cell_left + col_width
+      cell_center = cell_left + (col_width / 2)
+
+      # Center the text
+      text_start_x = cell_center - (text_width / 2)
+
+      # Ensure text doesn't go outside cell boundaries (with padding)
+      min_x = cell_left + @table_cell_padding
+      max_x = cell_right - @table_cell_padding - text_width
+      final_x = max(min_x, min(text_start_x, max_x))
+
+      escaped_text = escape_text(cell)
+      "BT /#{font} #{font_size} Tf 1 0 0 1 #{final_x} #{y_pos} Tm (#{escaped_text}) Tj ET"
+    end)
+    |> Enum.join("\n")
+  end
+
+  # Group consecutive table rows together
+  defp group_table_blocks(lines) do
+    lines
+    |> Enum.reduce({[], []}, fn line, {blocks, current_table} ->
+      cond do
+        String.contains?(line, "|") and String.trim(line) != "" ->
+          # This is a table row
+          {blocks, current_table ++ [line]}
+
+        current_table != [] ->
+          # End of table block
+          table_block = {:table, parse_table(current_table)}
+          {blocks ++ [table_block, {:text, line}], []}
+
+        true ->
+          # Regular text line
+          {blocks ++ [{:text, line}], []}
+      end
+    end)
+    |> then(fn {blocks, remaining_table} ->
+      if remaining_table != [] do
+        blocks ++ [table: parse_table(remaining_table)]
+      else
+        blocks
+      end
+    end)
+  end
+
+  # Parse table into structured data
+  defp parse_table(table_lines) do
+    # Filter out separator lines (lines with only |, -, and spaces)
+    data_lines = Enum.filter(table_lines, fn line ->
+      cleaned = String.replace(line, ~r/[\|\-\s]/, "")
+      cleaned != ""
+    end)
+
+    # Parse each row
+    rows = Enum.map(data_lines, &parse_table_row/1)
+
+    # Calculate column widths
+    max_cols = Enum.max(Enum.map(rows, &length/1), fn -> 0 end)
+    col_widths = calculate_column_widths(rows, max_cols)
+
+    %{rows: rows, col_widths: col_widths}
+  end
+
+  defp parse_table_row(line) do
+    line
+    |> String.trim()
+    |> String.trim_leading("|")
+    |> String.trim_trailing("|")
+    |> String.split("|")
+    |> Enum.map(&String.trim/1)
+  end
+
+  defp calculate_column_widths(rows, max_cols) do
+    # Calculate based on content length with available page width
+    base_widths = 0..(max_cols - 1)
+    |> Enum.map(fn col_index ->
+      max_content_length =
+        rows
+        |> Enum.map(fn row ->
+          Enum.at(row, col_index, "")
+          |> String.length()
+        end)
+        |> Enum.max(fn -> 0 end)
+
+      # Minimum width of 60, scale with content
+      max(max_content_length * 6 + @table_cell_padding * 2, 60)
+    end)
+
+    # Scale to fit page width
+    total_width = Enum.sum(base_widths)
+    available_width = @max_line_width - 20  # Leave some margin
+
+    if total_width > available_width do
+      scale_factor = available_width / total_width
+      Enum.map(base_widths, &round(&1 * scale_factor))
+    else
+      base_widths
+    end
   end
 end
